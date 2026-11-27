@@ -64,7 +64,7 @@ bibliomesh/
 ## 🗺️ Roadmap
 
 - [x] Repository bootstrap, GPLv3 license, and DevSecOps guardrails (Rulesets, Trivy, CodeQL)
-- [ ] Architecture Decision Records (Spring Modulith & Federated ILL)
+- [x] Architecture Decision Records (Spring Modulith & Federated ILL)
 - [ ] PostgreSQL schema design (Flyway `V1`) & Spring Modulith skeleton
 - [ ] ISBN auto-cataloging (Google Books + Open Library fallback)
 - [ ] Next.js Admin Panel + USB/Camera barcode scanner + Public OPAC
@@ -76,3 +76,5 @@ bibliomesh/
 
 - [Contributing Guide](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
+- [ADR-001: Modular Monolith Architecture with Spring Boot & Spring Modulith](docs/adr/001-modular-monolith-spring-modulith.md)
+- [ADR-002: Federated Peer-to-Peer Interlibrary Lending (ILL)](docs/adr/002-federated-interlibrary-architecture.md)
