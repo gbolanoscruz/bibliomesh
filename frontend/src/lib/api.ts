@@ -136,4 +136,68 @@ export const biblioApi = {
       method: "POST",
       body: JSON.stringify({ inscriptionNumber }),
     }),
+    listPatrons: (q = "") =>
+    requestJson<PatronRecord[]>(`/api/patrons?q=${encodeURIComponent(q)}`),
+  upsertPatron: (payload: {
+    identificationNumber: string;
+    firstName: string;
+    firstSurname?: string;
+    secondSurname?: string;
+    patronType?: "STUDENT" | "TEACHER" | "STAFF" | "PARTNER_LIBRARY";
+    gradeSection?: string;
+    phone?: string;
+    email?: string;
+    observations?: string;
+  }) =>
+    requestJson<PatronRecord>("/api/patrons", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  listTechResources: (q = "") =>
+    requestJson<TechResourceRecord[]>(
+      `/api/catalog/tech-resources?q=${encodeURIComponent(q)}`
+    ),
+  getDigitalLibrary: () =>
+    requestJson<DigitalLibraryResponse>("/api/opac/digital"),
 };
+
+export interface PatronRecord {
+  id: number;
+  identificationNumber: string;
+  firstName: string;
+  firstSurname: string | null;
+  secondSurname: string | null;
+  fullName: string;
+  patronType: "STUDENT" | "TEACHER" | "STAFF" | "PARTNER_LIBRARY";
+  gradeSection: string | null;
+  phone: string | null;
+  email: string | null;
+  observations: string | null;
+  active: boolean;
+}
+
+export interface TechResourceRecord {
+  id: number;
+  assetTag: string;
+  name: string;
+  resourceType: string;
+  brand: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  status: string;
+}
+
+export interface DigitalResourceRecord {
+  id: number;
+  title: string;
+  author: string | null;
+  category: string | null;
+  resourceUrl: string;
+  description: string | null;
+}
+
+export interface DigitalLibraryResponse {
+  libraryName: string;
+  driveFolderId: string | null;
+  resources: DigitalResourceRecord[];
+}
