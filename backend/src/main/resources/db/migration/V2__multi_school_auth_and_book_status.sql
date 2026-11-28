@@ -20,13 +20,27 @@ CREATE TABLE IF NOT EXISTS admin_users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE books
+ALTER TABLE book_copies
     ADD COLUMN IF NOT EXISTS school_id BIGINT REFERENCES schools(id),
     ADD COLUMN IF NOT EXISTS sequence_number BIGINT,
-    ADD COLUMN IF NOT EXISTS inscription_number VARCHAR(60),
-    ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'AVAILABLE',
     ADD COLUMN IF NOT EXISTS unavailable_reason VARCHAR(50),
     ADD COLUMN IF NOT EXISTS unavailable_notes TEXT;
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_books_inscription_number ON books(inscription_number);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_books_school_seq ON books(school_id, sequence_number);
+-- Amplía el CHECK de status para permitir bajas lógicas (DAMAGED, ERROR_ENTRY, WITHDRAWN)
+ALTER TABLE book_copies DROP CONSTRAINT IF EXISTS book_copies_status_check;
+ALTER TABLE book_copies
+    ADD CONSTRAINT book_copies_status_check
+    CHECK (status IN (
+        'AVAILABLE',
+        'LOANED',
+        'LOANED_INTERLIBRARY',
+        'IN_REPAIR',
+        'LOST',
+        'DAMAGED',
+        'ERROR_ENTRY',
+        'WITHDRAWN'
+    ));
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_book_copies_school_seq
+    ON book_copies(school_id, sequence_number)
+    WHERE school_id IS NOT NULL AND sequence_number IS NOT NULL;
