@@ -109,4 +109,12 @@ public final class CatalogDtos {
         PhysicalCondition physicalCondition,
         Boolean inLibrary
     ) {}
+
+    public record PagedTitlesResponse(
+        List<TitleResponse> items,
+        int page,
+        int size,
+        long totalElements,
+        int totalPages
+    ) {}
 }

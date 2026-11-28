@@ -72,14 +72,39 @@ public class CatalogService {
     }
 
     @Transactional(readOnly = true)
-    public List<TitleResponse> searchTitles(String query) {
-        List<BibliographicTitle> titles = (query == null || query.isBlank())
-                ? titleRepository.findAll()
-                : titleRepository.search(query.trim());
+    public com.bibliomesh.catalog.CatalogDtos.PagedTitlesResponse searchTitles(
+            String query, String schoolCode, int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(Math.max(1, size), 100);
+        String cleanQuery = trimOrNull(query);
+        String cleanSchool = trimOrNull(schoolCode);
 
-        return titles.stream()
-                .map(t -> toTitleResponse(t, copyRepository.findByTitleIdOrderByInscriptionNumberAsc(t.getId())))
+        var pageable = org.springframework.data.domain.PageRequest.of(safePage, safeSize);
+        var titlePage = titleRepository.searchPaged(cleanQuery, cleanSchool, pageable);
+
+        List<BibliographicTitle> titles = titlePage.getContent();
+        if (titles.isEmpty()) {
+            return new com.bibliomesh.catalog.CatalogDtos.PagedTitlesResponse(
+                    List.of(), titlePage.getNumber(), titlePage.getSize(),
+                    titlePage.getTotalElements(), titlePage.getTotalPages());
+        }
+
+        List<Long> titleIds = titles.stream().map(BibliographicTitle::getId).toList();
+        java.util.Map<Long, List<BookCopy>> copiesByTitleId = copyRepository
+                .findByTitleIdInOrderByInscriptionNumberAsc(titleIds)
+                .stream()
+                .collect(java.util.stream.Collectors.groupingBy(c -> c.getTitle().getId()));
+
+        List<TitleResponse> items = titles.stream()
+                .map(t -> toTitleResponse(t, copiesByTitleId.getOrDefault(t.getId(), List.of())))
                 .toList();
+
+        return new com.bibliomesh.catalog.CatalogDtos.PagedTitlesResponse(
+                items,
+                titlePage.getNumber(),
+                titlePage.getSize(),
+                titlePage.getTotalElements(),
+                titlePage.getTotalPages());
     }
 
     @Transactional(readOnly = true)

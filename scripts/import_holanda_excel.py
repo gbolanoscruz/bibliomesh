@@ -221,85 +221,101 @@ def apply_to_postgres(data: dict[str, Any], db_url: str) -> None:
             )
             school_id = cur.fetchone()[0]
 
-            # 2. Insertar títulos bibliográficos
+            # 2. Insertar títulos en lote (pipelining)
+            title_keys = list(data["titles"].keys())
+            title_rows = [
+                (
+                    t["isbn"], t["title"], t["author"], t["publisher"],
+                    t["publication_place"], t["publication_year"],
+                    t["collection_prefix"], t["dewey_code"], t["cutter_code"],
+                    t["is_recreational"], t["is_recommended"],
+                )
+                for t in data["titles"].values()
+            ]
+            print(f"Insertando {len(title_rows)} títulos...", flush=True)
+            cur.executemany(
+                """
+                INSERT INTO bibliographic_titles (
+                    isbn, title, author, publisher, publication_place,
+                    publication_year, collection_prefix, dewey_code, cutter_code,
+                    is_recreational, is_recommended
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                title_rows,
+                returning=True,
+            )
             title_id_by_key: dict[tuple[str, str, str], int] = {}
-            for key, t in data["titles"].items():
-                cur.execute(
-                    """
-                    INSERT INTO bibliographic_titles (
-                        isbn, title, author, publisher, publication_place,
-                        publication_year, collection_prefix, dewey_code, cutter_code,
-                        is_recreational, is_recommended
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        t["isbn"], t["title"], t["author"], t["publisher"],
-                        t["publication_place"], t["publication_year"],
-                        t["collection_prefix"], t["dewey_code"], t["cutter_code"],
-                        t["is_recreational"], t["is_recommended"],
-                    ),
-                )
-                title_id_by_key[key] = cur.fetchone()[0]
+            idx = 0
+            while True:
+                row = cur.fetchone()
+                if row is not None:
+                    title_id_by_key[title_keys[idx]] = row[0]
+                    idx += 1
+                if not cur.nextset():
+                    break
 
-            # 3. Insertar ejemplares (idempotente por inscription_number)
-            inserted_copies = 0
-            for c in data["copies"]:
-                cur.execute(
-                    """
-                    INSERT INTO book_copies (
-                        title_id, school_id, inscription_number, barcode,
-                        status, unavailable_reason, physical_condition,
-                        acquisition_source, in_library, observations
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (inscription_number) DO NOTHING
-                    """,
-                    (
-                        title_id_by_key[c["title_key"]],
-                        school_id,
-                        c["inscription_number"],
-                        c["inscription_number"],
-                        c["status"],
-                        c["unavailable_reason"],
-                        c["physical_condition"],
-                        c["acquisition_source"],
-                        c["in_library"],
-                        c["observations"],
-                    ),
+            # 3. Insertar ejemplares en lote
+            copy_rows = [
+                (
+                    title_id_by_key[c["title_key"]],
+                    school_id,
+                    c["inscription_number"],
+                    c["inscription_number"],
+                    c["status"],
+                    c["unavailable_reason"],
+                    c["physical_condition"],
+                    c["acquisition_source"],
+                    c["in_library"],
+                    c["observations"],
                 )
-                inserted_copies += cur.rowcount
+                for c in data["copies"]
+            ]
+            print(f"Insertando {len(copy_rows)} ejemplares...", flush=True)
+            cur.executemany(
+                """
+                INSERT INTO book_copies (
+                    title_id, school_id, inscription_number, barcode,
+                    status, unavailable_reason, physical_condition,
+                    acquisition_source, in_library, observations
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (inscription_number) DO NOTHING
+                """,
+                copy_rows,
+            )
 
-            # 4. Insertar audiovisuales (idempotente por inscription_number)
-            inserted_av = 0
-            for av in data["audiovisuals"]:
-                cur.execute(
-                    """
-                    INSERT INTO audiovisual_resources (
-                        school_id, inscription_number, item_type, description,
-                        author, publisher, country, publication_year
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (inscription_number) DO NOTHING
-                    """,
-                    (
-                        school_id,
-                        av["inscription_number"],
-                        av["item_type"],
-                        av["description"],
-                        av["author"],
-                        av["publisher"],
-                        av["country"],
-                        av["publication_year"],
-                    ),
+            # 4. Insertar audiovisuales en lote
+            av_rows = [
+                (
+                    school_id,
+                    av["inscription_number"],
+                    av["item_type"],
+                    av["description"],
+                    av["author"],
+                    av["publisher"],
+                    av["country"],
+                    av["publication_year"],
                 )
-                inserted_av += cur.rowcount
+                for av in data["audiovisuals"]
+            ]
+            print(f"Insertando {len(av_rows)} audiovisuales...", flush=True)
+            cur.executemany(
+                """
+                INSERT INTO audiovisual_resources (
+                    school_id, inscription_number, item_type, description,
+                    author, publisher, country, publication_year
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (inscription_number) DO NOTHING
+                """,
+                av_rows,
+            )
 
         conn.commit()
-    print(f"OK — Escuela {SCHOOL_CODE} (id={school_id}): {len(title_id_by_key)} títulos, {inserted_copies} ejemplares nuevos, {inserted_av} audiovisuales nuevos.")
-
-
+    print(f"OK — Escuela {SCHOOL_CODE} (id={school_id}): {len(title_id_by_key)} títulos, {len(copy_rows)} ejemplares procesados, {len(av_rows)} audiovisuales procesados.")
+    
 def main() -> int:
     parser = argparse.ArgumentParser(description="Importador Excel Escuela Holanda -> BiblioMesh PostgreSQL")
     parser.add_argument("--file", required=True, help="Ruta al archivo .xlsx")

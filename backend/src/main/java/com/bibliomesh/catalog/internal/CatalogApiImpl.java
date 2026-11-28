@@ -89,7 +89,7 @@ public class CatalogApiImpl implements CatalogApi {
     @Override
     @Transactional(readOnly = true)
     public List<TitleResponse> searchCatalog(String query) {
-        return catalogService.searchTitles(query);
+        return catalogService.searchTitles(query,null, 0, 24).items();
     }
 
     @Override
