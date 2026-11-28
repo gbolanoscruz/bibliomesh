@@ -31,6 +31,10 @@ export default function HomePage() {
   const [titles, setTitles] = useState<BibliographicTitle[]>([]);
   const [activeLoans, setActiveLoans] = useState<LoanRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
+  const [loadingTitles, setLoadingTitles] = useState(false);
   const [banner, setBanner] = useState<{ type: "ok" | "err"; msg: string } | null>(
     null
   );
@@ -71,43 +75,49 @@ export default function HomePage() {
   const isAdmin = Boolean(adminSession?.token);
   const isSuperAdmin = adminSession?.role === "SUPER_ADMIN";
 
-  async function refreshAll(q = searchQuery, schoolCode = selectedSchoolCode) {
+  async function refreshAll(
+    q = searchQuery,
+    schoolCode = selectedSchoolCode,
+    targetPage = page
+  ) {
+    setLoadingTitles(true);
     try {
-      const apiWithSchool = biblioApi as typeof biblioApi & {
-        listPublicSchools?: () => Promise<SchoolOption[]>;
-        searchTitlesBySchool?: (q: string, schoolCode?: string) => Promise<BibliographicTitle[]>;
-      };
-
       const requests: Promise<unknown>[] = [
         biblioApi.getStats(),
-        apiWithSchool.searchTitlesBySchool
-          ? apiWithSchool.searchTitlesBySchool(q, schoolCode || undefined)
-          : biblioApi.searchTitles(q),
+        biblioApi.searchTitlesPaged(q, schoolCode || undefined, targetPage, 24),
       ];
       if (isAdmin) {
         requests.push(biblioApi.listActiveLoans());
       }
-      if (apiWithSchool.listPublicSchools) {
-        requests.push(apiWithSchool.listPublicSchools());
-      }
+      requests.push(biblioApi.listPublicSchools());
 
       const results = await Promise.allSettled(requests);
       if (results[0]?.status === "fulfilled") {
         setStats(results[0].value as DashboardStats);
       }
       if (results[1]?.status === "fulfilled") {
-        setTitles(results[1].value as BibliographicTitle[]);
+        const paged = results[1].value as {
+          items: BibliographicTitle[];
+          page: number;
+          totalPages: number;
+          totalElements: number;
+        };
+        setTitles(paged.items);
+        setPage(paged.page);
+        setTotalPages(paged.totalPages);
+        setTotalElements(paged.totalElements);
       }
       if (isAdmin && results[2]?.status === "fulfilled") {
         setActiveLoans(results[2].value as LoanRecord[]);
       }
       const schoolsIdx = isAdmin ? 3 : 2;
       if (results[schoolsIdx]?.status === "fulfilled") {
-        const list = results[schoolsIdx].value as SchoolOption[];
-        setSchools(list);
+        setSchools(results[schoolsIdx].value as SchoolOption[]);
       }
     } catch {
       // handled per-request
+    } finally {
+      setLoadingTitles(false);
     }
   }
 
@@ -138,10 +148,11 @@ export default function HomePage() {
   function handleSelectSchool(code: string) {
     const normalized = code.trim().toUpperCase();
     setSelectedSchoolCode(normalized);
+    setPage(0);
     if (normalized) {
       saveSchoolCodeCookie(normalized);
     }
-    refreshAll(searchQuery, normalized);
+    refreshAll(searchQuery, normalized, 0);
   }
 
   async function handleAdminLogin(e: FormEvent) {
@@ -216,9 +227,9 @@ export default function HomePage() {
       if (!apiWithStatus.updateCopyStatus) {
         throw new Error("Falta implementar updateCopyStatus en frontend/src/lib/api.ts");
       }
-      await apiWithStatus.updateCopyStatus(copyId, {
+      await biblioApi.updateCopyStatus(copyId, {
         status,
-        reason: status,
+        unavailableReason: status,
       });
       setBanner({
         type: "ok",
@@ -639,7 +650,8 @@ export default function HomePage() {
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
-                  refreshAll(e.target.value, selectedSchoolCode);
+                  setPage(0);
+                  refreshAll(e.target.value, selectedSchoolCode, 0);
                 }}
                 placeholder="Buscar libros por título, autor, ISBN o inscripción..."
                 className="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm"
@@ -725,6 +737,33 @@ export default function HomePage() {
                   </div>
                 </article>
               ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4 text-sm text-slate-400">
+              <span>
+                {loadingTitles
+                  ? "Cargando catálogo..."
+                  : `Mostrando ${titles.length} de ${totalElements.toLocaleString()} títulos (página ${
+                      totalPages === 0 ? 0 : page + 1
+                    } de ${totalPages})`}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={loadingTitles || page <= 0}
+                  onClick={() => refreshAll(searchQuery, selectedSchoolCode, page - 1)}
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                >
+                  ← Anterior
+                </button>
+                <button
+                  type="button"
+                  disabled={loadingTitles || page + 1 >= totalPages}
+                  onClick={() => refreshAll(searchQuery, selectedSchoolCode, page + 1)}
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 font-medium text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                >
+                  Siguiente →
+                </button>
+              </div>
             </div>
           </main>
         </div>

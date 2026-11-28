@@ -27,6 +27,14 @@ export interface BibliographicTitle {
   copies: BookCopy[];
 }
 
+export interface PagedTitlesResponse {
+  items: BibliographicTitle[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+}
+
 export interface IsbnLookupResult {
   isbn: string;
   found: boolean;
@@ -82,6 +90,22 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function fetchPagedTitles(
+  q = "",
+  schoolCode?: string,
+  page = 0,
+  size = 24
+): Promise<PagedTitlesResponse> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (schoolCode) params.set("school", schoolCode);
+  params.set("page", String(page));
+  params.set("size", String(size));
+  return requestJson<PagedTitlesResponse>(
+    `/api/catalog/titles?${params.toString()}`
+  );
+}
+
 export const biblioApi = {
   baseUrl: API_BASE,
   getStats: () => requestJson<DashboardStats>("/api/circulation/stats"),
@@ -89,10 +113,19 @@ export const biblioApi = {
     requestJson<IsbnLookupResult>(
       `/api/catalog/isbn/${encodeURIComponent(isbn)}`
     ),
+  searchTitlesPaged: (
+    q = "",
+    schoolCode?: string,
+    page = 0,
+    size = 24
+  ) => fetchPagedTitles(q, schoolCode, page, size),
+
   searchTitles: (q = "") =>
-    requestJson<BibliographicTitle[]>(
-      `/api/catalog/titles?q=${encodeURIComponent(q)}`
-    ),
+    fetchPagedTitles(q, undefined, 0, 24).then((res) => res.items),
+
+  searchTitlesBySchool: (q = "", schoolCode?: string) =>
+    fetchPagedTitles(q, schoolCode, 0, 24).then((res) => res.items),
+
   createTitle: (payload: {
     isbn?: string;
     title: string;
@@ -161,16 +194,6 @@ export const biblioApi = {
     requestJson<DigitalLibraryResponse>("/api/opac/digital"),
   listPublicSchools: () =>
     requestJson<SchoolOption[]>("/api/public/schools"),
-
-  searchTitlesBySchool: (q = "", schoolCode?: string) => {
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (schoolCode) params.set("school", schoolCode);
-    const query = params.toString();
-    return requestJson<BibliographicTitle[]>(
-      `/api/catalog/titles${query ? `?${query}` : ""}`
-    );
-  },
 
   loginAdmin: (payload: { email: string; password: string }) =>
     requestJson<AdminSession>("/api/auth/login", {
@@ -245,9 +268,11 @@ export interface AdminSession {
 }
 
 export interface UpdateCopyStatusPayload {
-  status: "AVAILABLE" | "LOANED" | "LOST" | "DAMAGED" | "ERROR_ENTRY" | "WITHDRAWN";
-  reason: string;
-  notes?: string;
+  status: "AVAILABLE" | "LOANED" | "RESERVED" | "LOST" | "DAMAGED" | "ERROR_ENTRY" | "WITHDRAWN";
+  unavailableReason?: string;
+  unavailableNotes?: string;
+  physicalCondition?: "EXCELLENT" | "GOOD" | "FAIR" | "POOR";
+  inLibrary?: boolean;
 }
 
 function getAuthHeaders(): Record<string, string> {
