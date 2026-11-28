@@ -25,6 +25,50 @@ interface SchoolOption {
   lastInscriptionSeq?: number;
 }
 
+function BookCoverThumbnail({
+  coverUrl,
+  title,
+}: {
+  coverUrl: string | null;
+  title: string;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  if (coverUrl && !failed) {
+    return (
+      <img
+        src={coverUrl}
+        alt={`Portada de ${title}`}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="h-20 w-14 shrink-0 rounded border border-slate-700/80 bg-slate-950 object-cover shadow-sm"
+      />
+    );
+  }
+
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-20 w-14 shrink-0 flex-col items-center justify-center rounded border border-slate-800 bg-gradient-to-b from-slate-800/80 to-slate-950 text-slate-500 shadow-sm"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        className="h-6 w-6 opacity-75"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
+        />
+      </svg>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [tab, setTab] = useState<Tab>("catalog");
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -671,11 +715,32 @@ export default function HomePage() {
                       </span>
                       <span>{t.isbn || "Sin ISBN"}</span>
                     </div>
-                    <h3 className="text-base font-semibold text-white">{t.title}</h3>
-                    <p className="text-sm text-slate-400">
-                      {t.author || "Autor no registrado"}
-                      {t.publicationYear ? ` (${t.publicationYear})` : ""}
-                    </p>
+
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-white">
+                          {t.title}
+                        </h3>
+                        <p className="text-sm text-slate-400">
+                          {t.author || "Autor no registrado"}
+                          {t.publicationYear ? ` (${t.publicationYear})` : ""}
+                        </p>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-white">
+                          {t.title}
+                        </h3>
+                        <p className="text-sm text-slate-400">
+                          {t.author || "Autor no registrado"}
+                          {t.publicationYear ? ` (${t.publicationYear})` : ""}
+                        </p>
+                      </div>
+
+                      <BookCoverThumbnail coverUrl={t.coverUrl} title={t.title} />
+                    </div>
+                    </div>
                   </div>
 
                   <div className="mt-4 border-t border-slate-800 pt-3">
