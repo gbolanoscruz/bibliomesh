@@ -10,7 +10,6 @@ import com.bibliomesh.catalog.CatalogDtos.UpdateSettingsRequest;
 import com.bibliomesh.catalog.internal.CatalogService;
 import com.bibliomesh.catalog.internal.IsbnLookupService;
 import jakarta.validation.Valid;
-import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,8 +58,12 @@ public class CatalogController {
     }
 
     @GetMapping("/titles")
-    public List<TitleResponse> searchTitles(@RequestParam(name = "q", required = false) String query) {
-        return catalogService.searchTitles(query);
+    public com.bibliomesh.catalog.CatalogDtos.PagedTitlesResponse searchTitles(
+            @RequestParam(name = "q", required = false) String query,
+            @RequestParam(name = "school", required = false) String school,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "24") int size) {
+        return catalogService.searchTitles(query, school, page, size);
     }
 
     @GetMapping("/titles/{id}")
