@@ -5,6 +5,7 @@ import com.bibliomesh.catalog.CatalogDtos.BookCopyResponse;
 import com.bibliomesh.catalog.CatalogDtos.CreateTitleRequest;
 import com.bibliomesh.catalog.CatalogDtos.LibrarySettingsResponse;
 import com.bibliomesh.catalog.CatalogDtos.TitleResponse;
+import com.bibliomesh.catalog.CatalogDtos.UpdateCopyStatusRequest;
 import com.bibliomesh.catalog.CatalogDtos.UpdateSettingsRequest;
 import com.bibliomesh.catalog.CopyStatus;
 import java.time.OffsetDateTime;
@@ -154,5 +155,39 @@ public class CatalogService {
         if (value == null) return null;
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    @Transactional
+    public BookCopyResponse updateCopyStatus(
+            Long copyId,
+            UpdateCopyStatusRequest request,
+            com.bibliomesh.auth.AuthPrincipal principal) {
+        BookCopy copy = copyRepository.findById(copyId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ejemplar no encontrado: " + copyId));
+
+        if (!principal.canManageSchool(copy.getSchoolId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes permisos sobre esta escuela");
+        }
+
+        copy.setStatus(request.status());
+        if (request.status() == CopyStatus.AVAILABLE) {
+            copy.setUnavailableReason(null);
+            copy.setUnavailableNotes(null);
+        } else {
+            copy.setUnavailableReason(request.unavailableReason());
+            copy.setUnavailableNotes(request.unavailableNotes());
+        }
+
+        if (request.physicalCondition() != null) {
+            copy.setPhysicalCondition(request.physicalCondition());
+        }
+        if (request.inLibrary() != null) {
+            copy.setInLibrary(request.inLibrary());
+            copy.setLastInventoryCheckAt(java.time.OffsetDateTime.now());
+        }
+
+        copy.setUpdatedAt(java.time.OffsetDateTime.now());
+        BookCopy saved = copyRepository.save(copy);
+        return toCopyResponse(saved);
     }
 }
