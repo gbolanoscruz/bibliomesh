@@ -89,8 +89,8 @@ public class CatalogService {
                     titlePage.getTotalElements(), titlePage.getTotalPages());
         }
 
-        List<Long> titleIds = titles.stream().map(BibliographicTitle::getId).toList();
-        java.util.Map<Long, List<BookCopy>> copiesByTitleId = copyRepository
+        List<Long> titleIds = titles.stream().map(t -> t.getId()).toList();
+                java.util.Map<Long, List<BookCopy>> copiesByTitleId = copyRepository
                 .findByTitleIdInOrderByInscriptionNumberAsc(titleIds)
                 .stream()
                 .collect(java.util.stream.Collectors.groupingBy(c -> c.getTitle().getId()));
