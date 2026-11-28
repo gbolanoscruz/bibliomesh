@@ -101,4 +101,12 @@ public final class CatalogDtos {
             String logoUrl,
             @Size(max = 128) String digitalLibraryDriveFolderId
     ) {}
+
+    public record UpdateCopyStatusRequest(
+        @jakarta.validation.constraints.NotNull CopyStatus status,
+        String unavailableReason,
+        String unavailableNotes,
+        PhysicalCondition physicalCondition,
+        Boolean inLibrary
+    ) {}
 }

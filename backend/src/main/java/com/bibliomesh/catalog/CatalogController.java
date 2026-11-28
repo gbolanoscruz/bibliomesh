@@ -29,10 +29,24 @@ public class CatalogController {
 
     private final CatalogService catalogService;
     private final IsbnLookupService isbnLookupService;
+    private final com.bibliomesh.auth.AuthTokenVerifier authTokenVerifier;
 
-    public CatalogController(CatalogService catalogService, IsbnLookupService isbnLookupService) {
+    public CatalogController(
+            CatalogService catalogService,
+            IsbnLookupService isbnLookupService,
+            com.bibliomesh.auth.AuthTokenVerifier authTokenVerifier) {
         this.catalogService = catalogService;
         this.isbnLookupService = isbnLookupService;
+        this.authTokenVerifier = authTokenVerifier;
+    }
+
+    @org.springframework.web.bind.annotation.PatchMapping("/copies/{copyId}/status")
+    public BookCopyResponse updateCopyStatus(
+            @PathVariable Long copyId,
+            @org.springframework.web.bind.annotation.RequestHeader(name = "Authorization", required = false) String authorization,
+            @Valid @RequestBody com.bibliomesh.catalog.CatalogDtos.UpdateCopyStatusRequest request) {
+        var principal = authTokenVerifier.requireAdmin(authorization);
+        return catalogService.updateCopyStatus(copyId, request, principal);
     }
 
     @GetMapping("/isbn/{isbn}")
