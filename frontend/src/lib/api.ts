@@ -159,6 +159,31 @@ export const biblioApi = {
     ),
   getDigitalLibrary: () =>
     requestJson<DigitalLibraryResponse>("/api/opac/digital"),
+  listPublicSchools: () =>
+    requestJson<SchoolOption[]>("/api/public/schools"),
+
+  searchTitlesBySchool: (q = "", schoolCode?: string) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (schoolCode) params.set("school", schoolCode);
+    const query = params.toString();
+    return requestJson<BibliographicTitle[]>(
+      `/api/catalog/titles${query ? `?${query}` : ""}`
+    );
+  },
+
+  loginAdmin: (payload: { email: string; password: string }) =>
+    requestJson<AdminSession>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateCopyStatus: (copyId: number, payload: UpdateCopyStatusPayload) =>
+    requestJson<BookCopy>(`/api/catalog/copies/${copyId}/status`, {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    }),
 };
 
 export interface PatronRecord {
@@ -202,3 +227,37 @@ export interface DigitalLibraryResponse {
   resources: DigitalResourceRecord[];
 }
 
+export interface SchoolOption {
+  id: number;
+  code: string;
+  name: string;
+  seqPadding?: number;
+  lastInscriptionSeq?: number;
+}
+
+export interface AdminSession {
+  token: string;
+  email: string;
+  fullName: string;
+  role: "SUPER_ADMIN" | "SCHOOL_ADMIN" | "LIBRARIAN";
+  schoolId: number | null;
+  schoolCode: string | null;
+}
+
+export interface UpdateCopyStatusPayload {
+  status: "AVAILABLE" | "LOANED" | "LOST" | "DAMAGED" | "ERROR_ENTRY" | "WITHDRAWN";
+  reason: string;
+  notes?: string;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem("bibliomesh_admin_session");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<AdminSession>;
+    return parsed.token ? { Authorization: `Bearer ${parsed.token}` } : {};
+  } catch {
+    return {};
+  }
+}
