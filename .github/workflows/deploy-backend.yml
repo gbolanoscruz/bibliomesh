@@ -72,6 +72,9 @@ jobs:
           DB_URL: ${{ secrets.DB_URL }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_BOOTSTRAP_EMAIL: ${{ secrets.ADMIN_BOOTSTRAP_EMAIL }}
+          ADMIN_BOOTSTRAP_PASSWORD: ${{ secrets.ADMIN_BOOTSTRAP_PASSWORD }}
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image="${{ steps.build.outputs.image }}" \
@@ -83,7 +86,7 @@ jobs:
             --cpu-boost \
             --min-instances=0 \
             --max-instances=2 \
-            --set-env-vars="^|^DB_URL=${DB_URL}|DB_USER=${DB_USER}|DB_PASSWORD=${DB_PASSWORD}"
+            --set-env-vars="^|^DB_URL=${DB_URL}|DB_USER=${DB_USER}|DB_PASSWORD=${DB_PASSWORD}|JWT_SECRET=${JWT_SECRET}|ADMIN_BOOTSTRAP_EMAIL=${ADMIN_BOOTSTRAP_EMAIL}|ADMIN_BOOTSTRAP_PASSWORD=${ADMIN_BOOTSTRAP_PASSWORD}"
 
       - name: Verify live health endpoint
         run: |
