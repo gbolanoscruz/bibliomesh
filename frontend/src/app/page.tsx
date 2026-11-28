@@ -7,8 +7,23 @@ import {
   DashboardStats,
   LoanRecord,
 } from "@/lib/api";
+import {
+  AdminSession,
+  getSavedSchoolCode,
+  loadAdminSession,
+  saveAdminSession,
+  saveSchoolCodeCookie,
+} from "@/lib/session";
 
 type Tab = "catalog" | "circulation" | "labels";
+
+interface SchoolOption {
+  id: number;
+  code: string;
+  name: string;
+  seqPadding?: number;
+  lastInscriptionSeq?: number;
+}
 
 export default function HomePage() {
   const [tab, setTab] = useState<Tab>("catalog");
@@ -19,6 +34,15 @@ export default function HomePage() {
   const [banner, setBanner] = useState<{ type: "ok" | "err"; msg: string } | null>(
     null
   );
+
+  // Reader school selection persisted in cookie + Admin session
+  const [schools, setSchools] = useState<SchoolOption[]>([]);
+  const [selectedSchoolCode, setSelectedSchoolCode] = useState<string>("");
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Catalog form + ISBN lookup
   const [isbn, setIsbn] = useState("");
@@ -44,25 +68,170 @@ export default function HomePage() {
     { inscription: string; title: string; dewey: string; cutter: string }[]
   >([]);
 
-  async function refreshAll(q = searchQuery) {
+  const isAdmin = Boolean(adminSession?.token);
+  const isSuperAdmin = adminSession?.role === "SUPER_ADMIN";
+
+  async function refreshAll(q = searchQuery, schoolCode = selectedSchoolCode) {
     try {
-      const [statsRes, titlesRes, loansRes] = await Promise.allSettled([
+      const apiWithSchool = biblioApi as typeof biblioApi & {
+        listPublicSchools?: () => Promise<SchoolOption[]>;
+        searchTitlesBySchool?: (q: string, schoolCode?: string) => Promise<BibliographicTitle[]>;
+      };
+
+      const requests: Promise<unknown>[] = [
         biblioApi.getStats(),
-        biblioApi.searchTitles(q),
-        biblioApi.listActiveLoans(),
-      ]);
-      if (statsRes.status === "fulfilled") setStats(statsRes.value);
-      if (titlesRes.status === "fulfilled") setTitles(titlesRes.value);
-      if (loansRes.status === "fulfilled") setActiveLoans(loansRes.value);
+        apiWithSchool.searchTitlesBySchool
+          ? apiWithSchool.searchTitlesBySchool(q, schoolCode || undefined)
+          : biblioApi.searchTitles(q),
+      ];
+      if (isAdmin) {
+        requests.push(biblioApi.listActiveLoans());
+      }
+      if (apiWithSchool.listPublicSchools) {
+        requests.push(apiWithSchool.listPublicSchools());
+      }
+
+      const results = await Promise.allSettled(requests);
+      if (results[0]?.status === "fulfilled") {
+        setStats(results[0].value as DashboardStats);
+      }
+      if (results[1]?.status === "fulfilled") {
+        setTitles(results[1].value as BibliographicTitle[]);
+      }
+      if (isAdmin && results[2]?.status === "fulfilled") {
+        setActiveLoans(results[2].value as LoanRecord[]);
+      }
+      const schoolsIdx = isAdmin ? 3 : 2;
+      if (results[schoolsIdx]?.status === "fulfilled") {
+        const list = results[schoolsIdx].value as SchoolOption[];
+        setSchools(list);
+      }
     } catch {
       // handled per-request
     }
   }
 
   useEffect(() => {
-    refreshAll("");
+    const existingSession = loadAdminSession();
+    setAdminSession(existingSession);
+
+    const params =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search)
+        : null;
+    const urlSchool = params?.get("school")?.trim().toUpperCase() || "";
+    const cookieSchool = getSavedSchoolCode() || "";
+    const initialSchool =
+      existingSession?.role !== "SUPER_ADMIN" && existingSession?.schoolCode
+        ? existingSession.schoolCode.toUpperCase()
+        : urlSchool || cookieSchool;
+
+    if (initialSchool) {
+      setSelectedSchoolCode(initialSchool);
+      saveSchoolCodeCookie(initialSchool);
+    }
+
+    refreshAll("", initialSchool);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function handleSelectSchool(code: string) {
+    const normalized = code.trim().toUpperCase();
+    setSelectedSchoolCode(normalized);
+    if (normalized) {
+      saveSchoolCodeCookie(normalized);
+    }
+    refreshAll(searchQuery, normalized);
+  }
+
+  async function handleAdminLogin(e: FormEvent) {
+    e.preventDefault();
+    setLoggingIn(true);
+    setBanner(null);
+    try {
+      const apiWithAuth = biblioApi as typeof biblioApi & {
+        loginAdmin?: (payload: { email: string; password: string }) => Promise<AdminSession>;
+      };
+      if (!apiWithAuth.loginAdmin) {
+        throw new Error("Falta implementar loginAdmin en frontend/src/lib/api.ts");
+      }
+      const session = await apiWithAuth.loginAdmin({
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+      saveAdminSession(session);
+      setAdminSession(session);
+      setShowLoginModal(false);
+      setLoginPassword("");
+
+      const targetSchool =
+        session.role !== "SUPER_ADMIN" && session.schoolCode
+          ? session.schoolCode.toUpperCase()
+          : selectedSchoolCode;
+      if (targetSchool) {
+        setSelectedSchoolCode(targetSchool);
+        saveSchoolCodeCookie(targetSchool);
+      }
+
+      setBanner({
+        type: "ok",
+        msg: `Sesión iniciada como ${session.fullName || session.email} (${session.role}).`,
+      });
+      await refreshAll(searchQuery, targetSchool);
+    } catch (err) {
+      setBanner({
+        type: "err",
+        msg: err instanceof Error ? err.message : "Error al iniciar sesión",
+      });
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  function handleLogout() {
+    saveAdminSession(null);
+    setAdminSession(null);
+    setActiveLoans([]);
+    setTab("catalog");
+    setBanner({
+      type: "ok",
+      msg: "Sesión de administrador cerrada. Modo lector libre activo.",
+    });
+  }
+
+  async function handleMarkCopyUnavailable(
+    copyId: number,
+    inscription: string,
+    status: "LOST" | "DAMAGED" | "ERROR_ENTRY" | "WITHDRAWN"
+  ) {
+    if (!isAdmin) return;
+    setBanner(null);
+    try {
+      const apiWithStatus = biblioApi as typeof biblioApi & {
+        updateCopyStatus?: (
+          copyId: number,
+          payload: { status: string; reason: string }
+        ) => Promise<void>;
+      };
+      if (!apiWithStatus.updateCopyStatus) {
+        throw new Error("Falta implementar updateCopyStatus en frontend/src/lib/api.ts");
+      }
+      await apiWithStatus.updateCopyStatus(copyId, {
+        status,
+        reason: status,
+      });
+      setBanner({
+        type: "ok",
+        msg: `Ejemplar ${inscription} marcado como ${status}.`,
+      });
+      await refreshAll();
+    } catch (err) {
+      setBanner({
+        type: "err",
+        msg: err instanceof Error ? err.message : "No se pudo actualizar estado",
+      });
+    }
+  }
 
   async function handleIsbnLookup() {
     if (!isbn.trim()) return;
@@ -101,6 +270,7 @@ export default function HomePage() {
 
   async function handleCreateTitle(e: FormEvent) {
     e.preventDefault();
+    if (!isAdmin) return;
     setBanner(null);
     try {
       const created = await biblioApi.createTitle({
@@ -141,6 +311,7 @@ export default function HomePage() {
 
   async function handleCheckout(e: FormEvent) {
     e.preventDefault();
+    if (!isAdmin) return;
     setBanner(null);
     try {
       const loan = await biblioApi.checkout({
@@ -163,7 +334,7 @@ export default function HomePage() {
   }
 
   async function handleQuickReturn(codeToReturn = itemCode) {
-    if (!codeToReturn.trim()) return;
+    if (!isAdmin || !codeToReturn.trim()) return;
     setBanner(null);
     try {
       const returned = await biblioApi.returnItem(codeToReturn.trim());
@@ -183,7 +354,7 @@ export default function HomePage() {
 
   async function handleRoomConsultation(e: FormEvent) {
     e.preventDefault();
-    if (!roomCode.trim()) return;
+    if (!isAdmin || !roomCode.trim()) return;
     setBanner(null);
     try {
       await biblioApi.registerRoomConsultation(roomCode.trim());
@@ -225,57 +396,130 @@ export default function HomePage() {
             📚 BiblioMesh
           </h1>
           <p className="text-sm text-slate-400">
-            API: <span className="font-mono text-slate-300">{biblioApi.baseUrl}</span>
+            {isAdmin
+              ? `Admin: ${adminSession?.fullName || adminSession?.email} (${adminSession?.role}${
+                  adminSession?.schoolCode ? ` · ${adminSession.schoolCode}` : ""
+                })`
+              : "Modo lector libre (sin login) · Consulta de catálogo por biblioteca"}
           </p>
         </div>
 
-        <nav className="flex gap-2">
-          {(
-            [
-              ["catalog", "Catálogo & ISBN"],
-              ["circulation", "Circulación y Sala"],
-              ["labels", `Etiquetas (${labelQueue.length})`],
-            ] as const
-          ).map(([id, label]) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Seleccionar biblioteca o escuela"
+            value={selectedSchoolCode}
+            disabled={isAdmin && !isSuperAdmin && Boolean(adminSession?.schoolCode)}
+            onChange={(e) => handleSelectSchool(e.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 disabled:opacity-70"
+          >
+            <option value="">Todas las bibliotecas</option>
+            {schools.map((s) => (
+              <option key={s.id} value={s.code}>
+                {s.code} — {s.name}
+              </option>
+            ))}
+          </select>
+
+          {isAdmin && (
+            <nav className="flex gap-2">
+              {(
+                [
+                  ["catalog", "Catálogo & ISBN"],
+                  ["circulation", "Circulación y Sala"],
+                  ["labels", `Etiquetas (${labelQueue.length})`],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setTab(id)}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                    tab === id
+                      ? "bg-emerald-500 text-slate-950"
+                      : "bg-slate-900 text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {isAdmin ? (
             <button
-              key={id}
               type="button"
-              onClick={() => setTab(id)}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                tab === id
-                  ? "bg-emerald-500 text-slate-950"
-                  : "bg-slate-900 text-slate-300 hover:bg-slate-800"
-              }`}
+              onClick={handleLogout}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-rose-300 hover:bg-slate-700"
             >
-              {label}
+              Cerrar sesión
             </button>
-          ))}
-        </nav>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowLoginModal((prev) => !prev)}
+              className="rounded-lg bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400"
+            >
+              Admin Login
+            </button>
+          )}
+        </div>
       </header>
 
-      {/* KPI Strip */}
-      <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <div className="text-2xl font-bold">{stats?.totalBookCopies ?? 0}</div>
-          <div className="text-xs uppercase text-slate-400">Ejemplares</div>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <div className="text-2xl font-bold">{stats?.activePatrons ?? 0}</div>
-          <div className="text-xs uppercase text-slate-400">Lectores activos</div>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <div className="text-2xl font-bold text-amber-400">
-            {stats?.activeLoans ?? 0}
+      {!isAdmin && showLoginModal && (
+        <form
+          onSubmit={handleAdminLogin}
+          className="mb-6 grid gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4 sm:grid-cols-[1fr_1fr_auto]"
+        >
+          <input
+            type="email"
+            required
+            value={loginEmail}
+            onChange={(e) => setLoginEmail(e.target.value)}
+            placeholder="Correo de administrador"
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          />
+          <input
+            type="password"
+            required
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
+            placeholder="Contraseña"
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+          />
+          <button
+            type="submit"
+            disabled={loggingIn}
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+          >
+            {loggingIn ? "Entrando..." : "Ingresar"}
+          </button>
+        </form>
+      )}
+
+      {isAdmin && (
+        <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-2xl font-bold">{stats?.totalBookCopies ?? 0}</div>
+            <div className="text-xs uppercase text-slate-400">Ejemplares</div>
           </div>
-          <div className="text-xs uppercase text-slate-400">Préstamos activos</div>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <div className="text-2xl font-bold text-emerald-400">
-            {stats?.roomConsultations ?? 0}
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-2xl font-bold">{stats?.activePatrons ?? 0}</div>
+            <div className="text-xs uppercase text-slate-400">Lectores activos</div>
           </div>
-          <div className="text-xs uppercase text-slate-400">Consultas en sala</div>
-        </div>
-      </section>
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-2xl font-bold text-amber-400">
+              {stats?.activeLoans ?? 0}
+            </div>
+            <div className="text-xs uppercase text-slate-400">Préstamos activos</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+            <div className="text-2xl font-bold text-emerald-400">
+              {stats?.roomConsultations ?? 0}
+            </div>
+            <div className="text-xs uppercase text-slate-400">Consultas en sala</div>
+          </div>
+        </section>
+      )}
 
       {banner && (
         <div
@@ -290,96 +534,104 @@ export default function HomePage() {
       )}
 
       {tab === "catalog" && (
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <aside className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <h2 className="mb-4 text-lg font-semibold">Nuevo Libro / Autocompletar ISBN</h2>
+        <div
+          className={`grid gap-6 ${
+            isAdmin ? "lg:grid-cols-[360px_1fr]" : "grid-cols-1"
+          }`}
+        >
+          {isAdmin && (
+            <aside className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+              <h2 className="mb-4 text-lg font-semibold">
+                Nuevo Libro / Autocompletar ISBN
+              </h2>
 
-            <div className="mb-4 flex gap-2">
-              <input
-                value={isbn}
-                onChange={(e) => setIsbn(e.target.value)}
-                placeholder="ISBN 10 o 13 (ej. 9780134685991)"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <button
-                type="button"
-                onClick={handleIsbnLookup}
-                disabled={lookingUpIsbn}
-                className="shrink-0 rounded-lg bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50"
-              >
-                {lookingUpIsbn ? "..." : "Buscar ISBN"}
-              </button>
-            </div>
+              <div className="mb-4 flex gap-2">
+                <input
+                  value={isbn}
+                  onChange={(e) => setIsbn(e.target.value)}
+                  placeholder="ISBN 10 o 13 (ej. 9780134685991)"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={handleIsbnLookup}
+                  disabled={lookingUpIsbn}
+                  className="shrink-0 rounded-lg bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50"
+                >
+                  {lookingUpIsbn ? "..." : "Buscar ISBN"}
+                </button>
+              </div>
 
-            <form onSubmit={handleCreateTitle} className="space-y-3">
-              <input
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Título principal (*)"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <input
-                value={author}
-                onChange={(e) => setAuthor(e.target.value)}
-                placeholder="Autor / Creador"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <div className="grid grid-cols-2 gap-2">
+              <form onSubmit={handleCreateTitle} className="space-y-3">
                 <input
-                  value={deweyCode}
-                  onChange={(e) => setDeweyCode(e.target.value)}
-                  placeholder="Dewey (ej. 005.13)"
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Título principal (*)"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                 />
                 <input
-                  value={cutterCode}
-                  onChange={(e) => setCutterCode(e.target.value)}
-                  placeholder="Cutter (ej. B651e)"
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  value={author}
+                  onChange={(e) => setAuthor(e.target.value)}
+                  placeholder="Autor / Creador"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={deweyCode}
+                    onChange={(e) => setDeweyCode(e.target.value)}
+                    placeholder="Dewey (ej. 005.13)"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={cutterCode}
+                    onChange={(e) => setCutterCode(e.target.value)}
+                    placeholder="Cutter (ej. B651e)"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={publisher}
+                    onChange={(e) => setPublisher(e.target.value)}
+                    placeholder="Editorial"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={publicationYear}
+                    onChange={(e) => setPublicationYear(e.target.value)}
+                    placeholder="Año"
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                </div>
                 <input
-                  value={publisher}
-                  onChange={(e) => setPublisher(e.target.value)}
-                  placeholder="Editorial"
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  value={inscriptionNumber}
+                  onChange={(e) => setInscriptionNumber(e.target.value)}
+                  placeholder="Inscripción (vacío = consecutivo de escuela)"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                 />
                 <input
-                  value={publicationYear}
-                  onChange={(e) => setPublicationYear(e.target.value)}
-                  placeholder="Año"
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  value={coverUrl}
+                  onChange={(e) => setCoverUrl(e.target.value)}
+                  placeholder="URL de portada"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                 />
-              </div>
-              <input
-                value={inscriptionNumber}
-                onChange={(e) => setInscriptionNumber(e.target.value)}
-                placeholder="Inscripción (vacío = automático)"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <input
-                value={coverUrl}
-                onChange={(e) => setCoverUrl(e.target.value)}
-                placeholder="URL de portada"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <textarea
-                rows={3}
-                value={synopsis}
-                onChange={(e) => setSynopsis(e.target.value)}
-                placeholder="Resumen o sinopsis"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-              />
-              <button
-                type="submit"
-                className="w-full rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
-              >
-                Guardar Título y Ejemplar
-              </button>
-            </form>
-          </aside>
+                <textarea
+                  rows={3}
+                  value={synopsis}
+                  onChange={(e) => setSynopsis(e.target.value)}
+                  placeholder="Resumen o sinopsis"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  className="w-full rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+                >
+                  Guardar Título y Ejemplar
+                </button>
+              </form>
+            </aside>
+          )}
 
           <main className="space-y-4">
             <div className="flex gap-2">
@@ -387,9 +639,9 @@ export default function HomePage() {
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
-                  refreshAll(e.target.value);
+                  refreshAll(e.target.value, selectedSchoolCode);
                 }}
-                placeholder="Buscar por título, autor, ISBN o inscripción..."
+                placeholder="Buscar libros por título, autor, ISBN o inscripción..."
                 className="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm"
               />
             </div>
@@ -429,29 +681,47 @@ export default function HomePage() {
                         </span>
                       ))}
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await biblioApi.addCopy(t.id);
-                          await refreshAll();
-                        }}
-                        className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-700"
-                      >
-                        + Duplicar copia
-                      </button>
-                      {t.copies[0] && (
+
+                    {isAdmin && (
+                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() =>
-                            queueBookLabel(t, t.copies[0].inscriptionNumber)
-                          }
-                          className="rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/25"
+                          onClick={async () => {
+                            await biblioApi.addCopy(t.id);
+                            await refreshAll();
+                          }}
+                          className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-700"
                         >
-                          Etiqueta lomo
+                          + Duplicar copia
                         </button>
-                      )}
-                    </div>
+                        {t.copies[0] && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                queueBookLabel(t, t.copies[0].inscriptionNumber)
+                              }
+                              className="rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/25"
+                            >
+                              Etiqueta lomo
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleMarkCopyUnavailable(
+                                  t.copies[0].id,
+                                  t.copies[0].inscriptionNumber,
+                                  "WITHDRAWN"
+                                )
+                              }
+                              className="rounded-lg bg-rose-500/15 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/25"
+                            >
+                              Marcar no disponible
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </article>
               ))}
@@ -460,14 +730,16 @@ export default function HomePage() {
         </div>
       )}
 
-      {tab === "circulation" && (
+      {isAdmin && tab === "circulation" && (
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="space-y-6">
             <form
               onSubmit={handleCheckout}
               className="space-y-3 rounded-xl border border-slate-800 bg-slate-900 p-5"
             >
-              <h2 className="text-lg font-semibold">Préstamo y Devolución por Escáner</h2>
+              <h2 className="text-lg font-semibold">
+                Préstamo y Devolución por Escáner
+              </h2>
               <input
                 value={patronId}
                 onChange={(e) => setPatronId(e.target.value)}
@@ -514,7 +786,9 @@ export default function HomePage() {
               onSubmit={handleRoomConsultation}
               className="space-y-3 rounded-xl border border-slate-800 bg-slate-900 p-5"
             >
-              <h2 className="text-lg font-semibold">Consulta en Sala (Escáner rápido)</h2>
+              <h2 className="text-lg font-semibold">
+                Consulta en Sala (Escáner rápido)
+              </h2>
               <div className="flex gap-2">
                 <input
                   required
@@ -566,7 +840,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {tab === "labels" && (
+      {isAdmin && tab === "labels" && (
         <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">Cola de Impresión de Lomos</h2>
